@@ -46,7 +46,7 @@ bool patch_x64_add_to_text(std::vector<char>& data, DWORD peOffset)
     }
 
     if (!text) {
-        std::cerr << "[-] .text section not found.\n";
+        std::cout << "[-] .text section not found.\n";
         return false;
     }
 
@@ -90,7 +90,7 @@ bool patch_x64_add_to_text(std::vector<char>& data, DWORD peOffset)
             HMODULE user32 = LoadLibraryA("user32.dll");
             FARPROC msgbox = GetProcAddress(user32, "MessageBoxA");
             if (!msgbox) {
-                std::cerr << "[-] Failed to resolve MessageBoxA.\n";
+                std::cout << "[-] Failed to resolve MessageBoxA.\n";
                 return false;
             }
             *(ULONGLONG*)(patch + 31) = (ULONGLONG)msgbox;
@@ -108,7 +108,7 @@ bool patch_x64_add_to_text(std::vector<char>& data, DWORD peOffset)
         }
     }
 
-    std::cerr << "[-] Not enough space in .text section for x64 shellcode.\n";
+    std::cout << "[-] Not enough space in .text section for x64 shellcode.\n";
     return false;
 }
 
@@ -128,7 +128,7 @@ bool patch_x86_add_to_text(std::vector<char>& data, DWORD peOffset)
     }
 
     if (!text) {
-        std::cerr << "[-] .text section not found.\n";
+        std::cout << "[-] .text section not found.\n";
         return false;
     }
 
@@ -173,7 +173,7 @@ bool patch_x86_add_to_text(std::vector<char>& data, DWORD peOffset)
             HMODULE user32 = LoadLibraryA("user32.dll");
             FARPROC msgbox = GetProcAddress(user32, "MessageBoxA");
             if (!msgbox) {
-                std::cerr << "[-] Failed to resolve MessageBoxA.\n";
+                std::cout << "[-] Failed to resolve MessageBoxA.\n";
                 return false;
             }
             *(DWORD*)(patch + 13) = (DWORD)(DWORD_PTR)msgbox;
@@ -190,7 +190,7 @@ bool patch_x86_add_to_text(std::vector<char>& data, DWORD peOffset)
         }
     }
 
-    std::cerr << "[-] Not enough space in .text section for shellcode.\n";
+    std::cout << "[-] Not enough space in .text section for shellcode.\n";
     return false;
 }
 
@@ -225,7 +225,7 @@ bool patch_x64_add_new_section(std::vector<char>& data, DWORD peOffset)
     DWORD newRaw = utils::AlignUp(last.PointerToRawData + last.SizeOfRawData, opt->FileAlignment);
 
     if (!has_space_for_new_section_header_x64(nt, peOffset, data.size())) {
-        std::cerr << "[-] Not enough space in PE headers for new section header.\n";
+        std::cout << "[-] Not enough space in PE headers for new section header.\n";
         return false;
     }
 
@@ -243,7 +243,7 @@ bool patch_x64_add_new_section(std::vector<char>& data, DWORD peOffset)
     opt->SizeOfImage = newSec.VirtualAddress + newSec.Misc.VirtualSize;
 
     if (newRaw + 0x1000 > data.max_size()) {
-        std::cerr << "[-] File too large after resizing.\n";
+        std::cout << "[-] File too large after resizing.\n";
         return false;
     }
 
@@ -261,7 +261,7 @@ bool patch_x64_add_new_section(std::vector<char>& data, DWORD peOffset)
     DWORD capOffset = msgOffset + strlen(msg) + 1;
 
     if (capOffset + strlen(cap) + 1 > data.size()) {
-        std::cerr << "[-] Not enough space for strings.\n";
+        std::cout << "[-] Not enough space for strings.\n";
         return false;
     }
 
@@ -274,7 +274,7 @@ bool patch_x64_add_new_section(std::vector<char>& data, DWORD peOffset)
     HMODULE user32 = LoadLibraryA("user32.dll");
     FARPROC msgbox = GetProcAddress(user32, "MessageBoxA");
     if (!msgbox) {
-        std::cerr << "[-] Failed to resolve MessageBoxA.\n";
+        std::cout << "[-] Failed to resolve MessageBoxA.\n";
         return false;
     }
 
@@ -284,6 +284,7 @@ bool patch_x64_add_new_section(std::vector<char>& data, DWORD peOffset)
     memcpy(&data[newRaw], patch, sizeof(patch));
     opt->AddressOfEntryPoint = newSec.VirtualAddress;
 
+    std::cout << "[*] shellcode added to new section.\n";
     return true;
 }
 
@@ -298,7 +299,7 @@ bool patch_x86_add_new_section(std::vector<char>& data, DWORD peOffset)
     DWORD newRaw = utils::AlignUp(last.PointerToRawData + last.SizeOfRawData, opt->FileAlignment);
 
     if (!has_space_for_new_section_header_x86(nt, peOffset, data.size())) {
-        std::cerr << "[-] Not enough space in PE headers for new section header.\n";
+        std::cout << "[-] Not enough space in PE headers for new section header.\n";
         return false;
     }
 
@@ -315,7 +316,7 @@ bool patch_x86_add_new_section(std::vector<char>& data, DWORD peOffset)
     opt->SizeOfImage = newSec.VirtualAddress + newSec.Misc.VirtualSize;
 
     if (newRaw + 0x1000 > data.max_size()) {
-        std::cerr << "[-] File too large after resizing.\n";
+        std::cout << "[-] File too large after resizing.\n";
         return false;
     }
 
@@ -337,7 +338,7 @@ bool patch_x86_add_new_section(std::vector<char>& data, DWORD peOffset)
     HMODULE user32 = LoadLibraryA("user32.dll");
     FARPROC msgbox = GetProcAddress(user32, "MessageBoxA");
     if (!msgbox) {
-        std::cerr << "[-] Failed to resolve MessageBoxA.\n";
+        std::cout << "[-] Failed to resolve MessageBoxA.\n";
         return false;
     }
 
@@ -349,6 +350,7 @@ bool patch_x86_add_new_section(std::vector<char>& data, DWORD peOffset)
     memcpy(&data[newRaw], patch, sizeof(patch));
     opt->AddressOfEntryPoint = newSec.VirtualAddress;
 
+    std::cout << "[*] shellcode added to new section.\n";
     return true;
 }
 #pragma endregion
@@ -363,14 +365,14 @@ bool patcher::patch_pe(const std::string& filename)
 
     IMAGE_DOS_HEADER* dos = (IMAGE_DOS_HEADER*)data.data();
     if (dos->e_magic != IMAGE_DOS_SIGNATURE) {
-        std::cerr << "[-] Invalid MZ signature.\n";
+        std::cout << "[-] Invalid MZ signature.\n";
         return false;
     }
 
     DWORD peOffset = dos->e_lfanew;
     DWORD sig = *(DWORD*)&data[peOffset];
     if (sig != IMAGE_NT_SIGNATURE) {
-        std::cerr << "[-] Invalid PE signature.\n";
+        std::cout << "[-] Invalid PE signature.\n";
         return false;
     }
 
@@ -380,11 +382,11 @@ bool patcher::patch_pe(const std::string& filename)
     if (is64)
     {
         std::cout << "[*] 64-bit PE detected.\n";
-        // 1. finding enough free space in .text
+        std::cout << "[*] try adding shellcode to .text section.\n";
         bool status = patch_x64_add_to_text(data, peOffset);
         if (status)
         {
-            // 2. adding a new section if not enough space in .text
+            std::cout << "[*] try adding shellcode to new section.\n";
             status = patch_x64_add_new_section(data, peOffset);
             if (!status) {
                 std::cout << "[*] unable to create patched pe file.\n";
@@ -395,11 +397,11 @@ bool patcher::patch_pe(const std::string& filename)
     else
     {
         std::cout << "[*] 32-bit PE detected.\n";
-        // 1. finding enough free space in .text
+        std::cout << "[*] try adding shellcode to .text section.\n";
         bool status = patch_x86_add_to_text(data, peOffset);
         if (!status)
         {
-            // 2. adding a new section if not enough space in .text
+            std::cout << "[*] try adding shellcode to new section.\n";
             status = patch_x86_add_new_section(data, peOffset);
             if (!status) {
                 std::cout << "[*] unable to create patched pe file.\n";
