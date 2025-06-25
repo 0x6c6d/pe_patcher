@@ -381,14 +381,14 @@ bool patcher::patch_pe(const std::string& filename)
     {
         std::cout << "[*] 64-bit PE detected.\n";
         // 1. finding enough free space in .text
-        bool status = patch_x64_add_to_text();
+        bool status = patch_x64_add_to_text(data, peOffset);
         if (status)
         {
             // 2. adding a new section if not enough space in .text
             status = patch_x64_add_new_section(data, peOffset);
             if (!status) {
                 std::cout << "[*] unable to create patched pe file.\n";
-                return;
+                return false;
             }
         }
     }
@@ -396,14 +396,14 @@ bool patcher::patch_pe(const std::string& filename)
     {
         std::cout << "[*] 32-bit PE detected.\n";
         // 1. finding enough free space in .text
-        bool status = patch_x86_add_to_text();
+        bool status = patch_x86_add_to_text(data, peOffset);
         if (!status)
         {
             // 2. adding a new section if not enough space in .text
             status = patch_x86_add_new_section(data, peOffset);
             if (!status) {
                 std::cout << "[*] unable to create patched pe file.\n";
-                return;
+                return false;
             }
         }
     }
